@@ -1,0 +1,112 @@
+---
+title: "Practical Machine Learning Project"
+author: "Dennis Chandler"
+output: html_document
+---
+## Background
+
+Over the past several years there has been an explosion in the area of the
+quantified self (e.g. measuring physical activity).  Most of the applications simply involve recording movements, but not on determining the correct movements.  A group of researchers ran an experiment and collected data in an attempt to quantify correct and incorrect techniques in simple exercises.  The paper and data can be found at this [website](http://groupware.les.inf.puc-rio.br/har). The following analysis is based on the data collected from this research.
+
+## Data Preparation
+The researchers gathered data from several sensors placed on the participants, but for some reason not explained in the paper over half the variables have values of NA, plus several other variables only have values for 2% or less of the rows.  The data will be prepped by loading the appropriate packages into R and then loading the data into memory.  The data will then be segregated into a Training set (60%), Validation set (20%), and a Testing set (20%).  The data preparation will occur to each set separately, but will use the exact same code. 
+```{r, message=FALSE, error=FALSE, results='hide'}
+library(caret)
+library(randomForest)
+```
+```{r, cache=TRUE}
+dat <- read.csv("pml-training.csv", stringsAsFactors = FALSE)
+set.seed(12345)
+inTrain <- createDataPartition(y = dat$classe, p = 0.6, list = FALSE)
+datTrain <- dat[inTrain,]
+datNotTrain <- dat[-inTrain,]
+inTest <- createDataPartition( y=datNotTrain$classe, p = 0.5, list = FALSE)
+datTest <- datNotTrain[inTest,]
+datValidate <- datNotTrain[-inTest,]
+datTrain.clean <- datTrain[,apply(!is.na(datTrain), 2, all)]
+datTrain.clean <- datTrain.clean[,-c(1,2,3,4,5,6,7,12,13,14,15,
+                                     16,17,18,19,20,43,44,45,46,
+                                     47,48,52,53,54,55,56,57,58,
+                                     59,60,74,75,76,77,78,79,80,
+                                     81,82)]
+datTrain.clean$classe <- as.factor(datTrain.clean$classe)
+```
+
+## Analysis and Model Selection
+Exploratory analysis of the 'clean' data set shows that there are 52 variables left in the data set.  There are several apparent correlations and other patterns in the data.  The problem presented is one of classification into the value contained in the classe variable.  Given these observations we will use the Random Forest classification technique for the following reasons:
+
+1. Random Forests perform feature selection
+2. The ensemble aspect will improve predication
+3. Easy to set up cross-validation for error analysis
+  
+We will use the caret package to help select the parameters for the Random Forest.  We will use the ctrl variable to set up a 10-fold cross validation for all the models.  We will then run the Random Forest with 2 ,4 ,8 ,16, and 52 variables at each tree (note the 52 variable version will simply be the bagged version of a decision tree).  The default for Random Forest is the square root of the number of variables, which in this case is 7.2, hence why we chose 2,4,8, and 16 to give us a range around the default.  We will also limit the number of trees at 100 to cut down on the processing time.  We will evaluate the error rate to confirm that 100 trees are enough.
+
+```{r, cache=TRUE}
+ctrl <- trainControl(method = "cv", number = 10)
+grid_rf <- expand.grid(.mtry = c(2,4,8,16,52))
+set.seed(12345)
+model.train <- train(classe ~., data = datTrain.clean, method = "rf",
+                     trControl = ctrl,
+                     tuneGrid = grid_rf,
+                     importance = TRUE,
+                     ntree = 100)
+```
+
+## Model Evaluation
+After caret runs the request we review the results for all the variations:
+```{r, results='markup'}
+model.train
+```
+The results with the cross-validation shows the model with 8 variables for each tree had the highest accuracy and the highest kappa.  We will use that model for further analysis. We will set the finalModel to the model object and evaluate its performance.
+```{r}
+model <- model.train$finalModel
+model
+```
+The cross validation shows the model has an OOB error rate of 0.88%, which corresponds to the results in the confusion matrix.  With the cross-validation performed during the training, we feel this is a good value for the training error.  However, the test error will be worse than the training error, and we will have to use the segregated data later to fully evaluate the model.  
+
+Let's now look at the top 25 variables by importance, which is an indication of variable selection in the model:
+```{r}
+varImpPlot(model, n.var=25)
+```
+  
+For both measures, 'yaw-belt' and 'roll-belt' are the most important, with pitch-belt, pitch-forearm, and magnet-dumbbell-z rounding out the top 5.  The original paper indicates the authors selected 17 variables to build their model with.  It appears that there are some additional variables that helps the model in prediction.  
+
+Next we need to look at the error on a number of trees basis to see if the limit of 100 is sufficient:
+```{r}
+plot(model)
+legend("topright", lwd = 1, col = c(1,2,3,4,5,6),
+       legend = c("OOB", "A", "B", "C", "D", "E"))
+```
+  
+The plot shows error dropping off rapidly and settling in around 90 trees, so the 100 trees should be adequate for our classification purposes.
+
+## Prediction Results
+With the selected model, we can now run the validation test set through the data processing script, perform a prediction of class, and then compare to the actual values in order to judge the predictive power of the model.
+```{r}
+datValidate.clean <- datValidate[,apply(!is.na(datValidate), 2, all)]
+datValidate.clean <- datValidate.clean[,-c(1,2,3,4,5,6,7,12,13,14,15,
+                                     16,17,18,19,20,43,44,45,46,
+                                     47,48,52,53,54,55,56,57,58,
+                                     59,60,74,75,76,77,78,79,80,
+                                     81,82)]
+datValidate.clean$classe <- as.factor(datValidate.clean$classe)
+val.pred <- predict(model.train, datValidate.clean)
+confusionMatrix(val.pred, datValidate$classe)
+```
+  
+The confusion matrix shows the model is a good predictor, with an accuracy of 99.16%, or an out of sample error rate of 0.84%.  Normally we would use this information to tweak the model, but there is not much more we can do.
+  
+We will now use the model to predict classes for the test set.  The test set can only be evaluated once in order to get the best prediction error rate that we can for the model.
+```{r}
+datTest.clean <- datTest[,apply(!is.na(datTest), 2, all)]
+datTest.clean <- datTest.clean[,-c(1,2,3,4,5,6,7,12,13,14,15,
+                                           16,17,18,19,20,43,44,45,46,
+                                           47,48,52,53,54,55,56,57,58,
+                                           59,60,74,75,76,77,78,79,80,
+                                           81,82)]
+datTest.clean$classe <- as.factor(datTest.clean$classe)
+val.test <- predict(model.train, datTest.clean)
+confusionMatrix(val.test, datTest$classe)
+```
+The confusion matrix shows again that the model is a good predictor, with an accuracy of 99.49%, or an out of sample error rate of 0.51%.  
+With these final results, we can release the model for use on the test samples in the second part of the assignment.
